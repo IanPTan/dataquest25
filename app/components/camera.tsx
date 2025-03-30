@@ -15,6 +15,13 @@ interface DetectedObject {
   };
 }
 
+// Add this at the top of your file, before your component
+declare global {
+  interface Window {
+    currentProcessingTimeout: NodeJS.Timeout | null;
+  }
+}
+
 export default function Camera() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -26,10 +33,15 @@ export default function Camera() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [showDetections, setShowDetections] = useState(true);
   const [animating, setAnimating] = useState(false);
+  const [audioSrc, setAudioSrc] = useState<string | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
   
   // Frame processing control
   const lastFrameTimeRef = useRef<number>(0);
   const processingThrottleMs = 1000; // Send at most one frame per second
+  
+  // Add this ref to store the timeout
+  const processingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   
   // Start camera feed with animation
   const startCamera = async () => {
@@ -168,7 +180,7 @@ export default function Camera() {
   const connectWebSocket = () => {
     try {
       // Use your backend URL here
-      const socket = io('http://10.0.0.199:5000', {
+      const socket = io('http://localhost:5000', {
         transports: ['websocket'],
         reconnection: true,
         reconnectionAttempts: 5,
@@ -192,16 +204,37 @@ export default function Camera() {
       });
       
       socket.on('detection_result', (data: any) => {
-        if (data.objects) {
-          setDetectedObjects(data.objects);
-          console.log('Received detection results:', data.objects);
+        console.log('Detection result received:', data);
+        
+        // Clear the processing timeout
+        if (processingTimeoutRef.current) {
+          clearTimeout(processingTimeoutRef.current);
+          processingTimeoutRef.current = null;
         }
-        setIsProcessing(false);
-      });
-      
-      socket.on('error', (data: any) => {
-        console.error('Server error:', data.message);
-        setError(`Server error: ${data.message}`);
+        
+        if (data?.objects) {
+          console.log('Number of objects detected:', data.objects.length);
+          
+          // Only update detections if they're different from current ones
+          if (!areDetectionsSimilar(detectedObjects, data.objects)) {
+            setDetectedObjects(data.objects);
+          } else {
+            console.log('Detections similar to previous, not updating UI');
+          }
+          
+          // Check if audio data was received
+          if (data.audio && data.audio.data) {
+            console.log('Received audio data:', data.audio.text);
+            playAudio(data.audio.data, data.audio.format || 'mp3');
+          }
+        } else {
+          console.error('No objects field in detection result:', data);
+          // Only clear if we had objects before
+          if (detectedObjects.length > 0) {
+            setDetectedObjects([]);
+          }
+        }
+        
         setIsProcessing(false);
       });
       
@@ -210,6 +243,12 @@ export default function Camera() {
         if (data.status === 'throttled') {
           setIsProcessing(false);
         }
+      });
+      
+      socket.on('error', (data: any) => {
+        console.error('Server error:', data.message);
+        setError(data.message);
+        setIsProcessing(false);
       });
       
       socketRef.current = socket;
@@ -228,62 +267,58 @@ export default function Camera() {
     }
   };
   
-  // Process and draw video frames
+  // First, add the missing ref at the top of your component
+  const animationFrameRef = useRef<number | null>(null);
+  
+  // Then fix the animation frame effect to match our existing code
   useEffect(() => {
-    if (!isCameraActive || !videoRef.current) return;
-    
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
-    
-    if (!video || !canvas) return;
-    
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    if (!ctx) return;
-    
-    // Set canvas size to match video
-    canvas.width = video.videoWidth || 640;
-    canvas.height = video.videoHeight || 480;
-    
-    console.log(`Canvas size set to: ${canvas.width}x${canvas.height}`);
-    console.log(`Video size: ${video.videoWidth}x${video.videoHeight}`);
-    
-    let animationFrameId: number;
-    
-    const processFrame = () => {
-      // Only draw when video is ready
-      if (video.readyState === video.HAVE_ENOUGH_DATA) {
-        // Make sure canvas dimensions match video
+    if (isCameraActive && videoRef.current && canvasRef.current) {
+      const drawFrame = () => {
+        if (!videoRef.current || !canvasRef.current) return;
+        
+        const canvas = canvasRef.current;
+        const video = videoRef.current;
+        const ctx = canvas.getContext('2d');
+        
+        if (!ctx) return;
+        
+        // Set canvas dimensions to match video
         if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
           canvas.width = video.videoWidth;
           canvas.height = video.videoHeight;
-          console.log(`Updated canvas size: ${canvas.width}x${canvas.height}`);
         }
         
         // Draw video frame to canvas
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         
-        // Draw detected objects if available
+        // Draw bounding boxes if available and enabled
         if (showDetections && detectedObjects.length > 0) {
           drawDetectedObjects(ctx, detectedObjects);
         }
         
-        // Check if we should send a frame for processing
+        // Send frame for processing if connected and not already processing
         const now = Date.now();
         if (isConnected && !isProcessing && (now - lastFrameTimeRef.current > processingThrottleMs)) {
-          sendFrameForProcessing(canvas);
+          // Note: This will clear detections as the new frame is sent
+          sendFrame();
           lastFrameTimeRef.current = now;
         }
-      }
+        
+        // Continue animation loop
+        animationFrameRef.current = requestAnimationFrame(drawFrame);
+      };
       
-      animationFrameId = requestAnimationFrame(processFrame);
-    };
-    
-    animationFrameId = requestAnimationFrame(processFrame);
-    
-    return () => {
-      cancelAnimationFrame(animationFrameId);
-    };
-  }, [isCameraActive, isConnected, isProcessing, detectedObjects, showDetections]);
+      // Start the animation loop
+      animationFrameRef.current = requestAnimationFrame(drawFrame);
+      
+      // Clean up
+      return () => {
+        if (animationFrameRef.current) {
+          cancelAnimationFrame(animationFrameRef.current);
+        }
+      };
+    }
+  }, [isCameraActive, isConnected, isProcessing, showDetections, detectedObjects]);
   
   // Draw detected objects on canvas
   const drawDetectedObjects = (ctx: CanvasRenderingContext2D, objects: DetectedObject[]) => {
@@ -321,26 +356,152 @@ export default function Camera() {
   };
   
   // Send a frame to the backend for processing
-  const sendFrameForProcessing = (canvas: HTMLCanvasElement) => {
-    if (!socketRef.current || !socketRef.current.connected) return;
+  const sendFrame = () => {
+    if (!videoRef.current || !canvasRef.current || !socketRef.current || isProcessing) {
+      return;
+    }
+    
+    // Add a timeout to prevent getting stuck
+    const timeout = setTimeout(() => {
+      console.warn("Processing timeout triggered - UI unblocked");
+      setIsProcessing(false);
+      setError("Processing timed out. Server might be slow or unresponsive.");
+      processingTimeoutRef.current = null;
+    }, 15000); // 15 seconds timeout
+    
+    // Store the timeout in the ref
+    processingTimeoutRef.current = timeout;
+    
+    console.log("Setting isProcessing = true");
+    setIsProcessing(true);
+    setError(null);
     
     try {
-      setIsProcessing(true);
+      const canvas = canvasRef.current;
+      const ctx = canvas.getContext('2d');
       
-      // Compress the image before sending
-      const imageData = canvas.toDataURL('image/jpeg', 0.7); // 70% quality
+      if (!ctx) {
+        console.error("Canvas context not available");
+        if (processingTimeoutRef.current) {
+          clearTimeout(processingTimeoutRef.current);
+          processingTimeoutRef.current = null;
+        }
+        setIsProcessing(false);
+        return;
+      }
       
-      // Send via WebSocket
-      socketRef.current.emit('frame', { data: imageData });
+      const frameId = `${Date.now().toString().slice(-6)}`;
+      const imageData = canvas.toDataURL('image/jpeg', 0.8);
+      
+      console.log(`Sending frame ${frameId}`);
+      
+      // Send the frame
+      socketRef.current.emit('frame', {
+        data: imageData,
+        frame_id: frameId
+      });
+      
     } catch (err) {
-      console.error('Error sending frame:', err);
+      console.error("Error sending frame:", err);
+      if (processingTimeoutRef.current) {
+        clearTimeout(processingTimeoutRef.current);
+        processingTimeoutRef.current = null;
+      }
       setIsProcessing(false);
+      setError("Client error sending frame.");
     }
   };
   
   // Toggle detection visibility
   const toggleDetections = () => {
     setShowDetections(!showDetections);
+  };
+  
+  // Add this function to play audio when received
+  const playAudio = (audioBase64: string, format: string = 'mp3') => {
+    try {
+      // Create audio data URL
+      const contentType = format === 'mp3' ? 'audio/mpeg' : 'audio/wav';
+      const audioUrl = `data:${contentType};base64,${audioBase64}`;
+      
+      console.log(`Playing audio (${format}, ${audioBase64.length} bytes)`);
+      
+      // Create and play audio element
+      const audio = new Audio(audioUrl);
+      
+      audio.oncanplay = () => {
+        console.log('Audio ready to play');
+        audio.play()
+          .then(() => {
+            console.log('Audio playing');
+            setIsPlaying(true);
+          })
+          .catch(err => {
+            console.error('Error playing audio:', err);
+          });
+      };
+      
+      audio.onended = () => {
+        console.log('Audio playback ended');
+        setIsPlaying(false);
+      };
+      
+      audio.onerror = (e) => {
+        console.error('Audio error:', e);
+      };
+      
+      // Store the URL for potential reuse
+      setAudioSrc(audioUrl);
+      
+    } catch (err) {
+      console.error('Error setting up audio:', err);
+    }
+  };
+  
+  // Add cleanup in useEffect
+  useEffect(() => {
+    return () => {
+      // Clean up timeout on unmount
+      if (processingTimeoutRef.current) {
+        clearTimeout(processingTimeoutRef.current);
+        processingTimeoutRef.current = null;
+      }
+    };
+  }, []);
+  
+  // Add this function to compare detections
+  const areDetectionsSimilar = (prev: DetectedObject[], curr: DetectedObject[], threshold = 0.1) => {
+    // If counts are different, they're not similar
+    if (prev.length !== curr.length) return false;
+    
+    // If no objects, they're similar (both empty)
+    if (prev.length === 0) return true;
+    
+    // Check each object
+    for (let i = 0; i < prev.length; i++) {
+      const prevObj = prev[i];
+      
+      // Find matching object in current detections
+      const matchingObj = curr.find(obj => obj.label === prevObj.label);
+      
+      // If no matching object with same label, not similar
+      if (!matchingObj) return false;
+      
+      // Check if bounding box has moved significantly
+      const xDiff = Math.abs(prevObj.bbox.x - matchingObj.bbox.x);
+      const yDiff = Math.abs(prevObj.bbox.y - matchingObj.bbox.y);
+      const widthDiff = Math.abs(prevObj.bbox.width - matchingObj.bbox.width);
+      const heightDiff = Math.abs(prevObj.bbox.height - matchingObj.bbox.height);
+      
+      // If any dimension changed more than threshold, not similar
+      if (xDiff > threshold || yDiff > threshold || 
+          widthDiff > threshold || heightDiff > threshold) {
+        return false;
+      }
+    }
+    
+    // All objects are similar
+    return true;
   };
   
   return (

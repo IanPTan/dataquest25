@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Audio Test</title>
+    <script src="https://cdn.socket.io/4.4.1/socket.io.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; padding: 20px; }
+        button { padding: 10px 20px; margin: 10px; font-size: 16px; cursor: pointer; }
+        #log { border: 1px solid #ccc; padding: 10px; height: 200px; overflow-y: auto; text-align: left; margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <h1>Audio Test Page</h1>
+    <div>
+        <button id="testButton">Test Simple Audio</button>
+        <button id="playButton" disabled>Play Received Audio</button>
+    </div>
+    <div id="log"></div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const socket = io('http://localhost:5000', {
+                transports: ['websocket']
+            });
+            
+            const log = document.getElementById('log');
+            const testButton = document.getElementById('testButton');
+            const playButton = document.getElementById('playButton');
+            
+            let audioUrl = null;
+            
+            function addLog(message) {
+                const time = new Date().toLocaleTimeString();
+                log.innerHTML += `<div>[${time}] ${message}</div>`;
+                log.scrollTop = log.scrollHeight;
+            }
+            
+            socket.on('connect', () => {
+                addLog('Connected to server');
+                testButton.disabled = false;
+            });
+            
+            socket.on('disconnect', () => {
+                addLog('Disconnected from server');
+                testButton.disabled = true;
+                playButton.disabled = true;
+            });
+            
+            socket.on('tts_response', (data) => {
+                addLog(`Received TTS response: ${data.audio.length} bytes, format: ${data.format || 'unknown'}`);
+                
+                // Create audio URL
+                const format = data.format || 'mp3';
+                const contentType = format === 'mp3' ? 'audio/mpeg' : 'audio/wav';
+                audioUrl = `data:${contentType};base64,${data.audio}`;
+                
+                playButton.disabled = false;
+                
+                // Try auto-play
+                const audio = new Audio(audioUrl);
+                audio.play()
+                    .then(() => addLog('Auto-play started'))
+                    .catch(err => addLog(`Auto-play blocked: ${err.message}`));
+            });
+            
+            socket.on('tts_error', (data) => {
+                addLog(`TTS Error: ${data.message}`);
+            });
+            
+            testButton.addEventListener('click', () => {
+                addLog('Sending TTS request');
+                socket.emit('tts_request', {
+                    text: 'This is a simple audio test',
+                    use_simple: true
+                });
+            });
+            
+            playButton.addEventListener('click', () => {
+                if (!audioUrl) return;
+                
+                addLog('Attempting manual playback');
+                const audio = new Audio(audioUrl);
+                
+                audio.oncanplaythrough = () => {
+                    addLog('Audio ready for playback');
+                    audio.play()
+                        .then(() => addLog('Playback started'))
+                        .catch(err => addLog(`Playback error: ${err.message}`));
+                };
+                
+                audio.onended = () => addLog('Playback ended');
+                audio.onerror = () => addLog('Audio error during playback');
+            });
+        });
+    </script>
+</body>
+</html> 
