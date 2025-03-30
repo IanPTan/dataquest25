@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
+import './camera.css';
 
 interface DetectedObject {
   label: string;
@@ -24,70 +25,142 @@ export default function Camera() {
   const [detectedObjects, setDetectedObjects] = useState<DetectedObject[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [showDetections, setShowDetections] = useState(true);
+  const [animating, setAnimating] = useState(false);
   
   // Frame processing control
   const lastFrameTimeRef = useRef<number>(0);
   const processingThrottleMs = 1000; // Send at most one frame per second
   
-  // Start camera feed
+  // Start camera feed with animation
   const startCamera = async () => {
-    try {
-      const constraints = {
-        video: {
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          facingMode: 'environment' // Use back camera on mobile devices
+    if (animating) return;
+    
+    setAnimating(true);
+    
+    // Start eye opening animation
+    const eyeElement = document.getElementById('camera-eye');
+    if (eyeElement) {
+      eyeElement.classList.add('opening');
+      
+      // Wait for animation to complete before actually activating camera
+      setTimeout(async () => {
+        try {
+          // Check if MediaDevices API is available
+          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            setError("Camera API not available in your browser. Try using a modern browser or ensure you're using HTTPS.");
+            console.error("MediaDevices API not available");
+            setAnimating(false);
+            return;
+          }
+
+          // Set constraints with better mobile compatibility
+          const constraints = {
+            video: {
+              facingMode: { ideal: 'environment' },
+              width: { ideal: 1280 },
+              height: { ideal: 720 }
+            }
+          };
+          
+          console.log("Requesting camera access...");
+          const stream = await navigator.mediaDevices.getUserMedia(constraints);
+          console.log("Camera access granted", stream);
+          
+          if (videoRef.current) {
+            videoRef.current.srcObject = stream;
+            videoRef.current.onloadedmetadata = () => {
+              console.log("Video metadata loaded");
+              videoRef.current!.play()
+                .then(() => {
+                  setIsCameraActive(true);
+                  setError(null);
+                  console.log("Camera started successfully");
+                  
+                  // Connect to WebSocket when camera starts
+                  connectWebSocket();
+                  
+                  // Add small delay before removing the animation state
+                  // This ensures the eyelids are fully open before setting animating to false
+                  setTimeout(() => {
+                    setAnimating(false);
+                  }, 100);
+                })
+                .catch(err => {
+                  setError("Failed to play video: " + err.message);
+                  console.error("Failed to play video:", err);
+                  setAnimating(false);
+                });
+            };
+          }
+        } catch (err) {
+          console.error('Camera access error:', err);
+          
+          // More specific error messages based on the error type
+          if (err instanceof DOMException) {
+            if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+              setError('Camera access denied. Please allow camera access and try again.');
+            } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+              setError('No camera found on your device.');
+            } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+              setError('Camera is already in use by another application.');
+            } else if (err.name === 'OverconstrainedError') {
+              setError('Camera cannot satisfy the requested constraints. Try a different camera.');
+            } else if (err.name === 'TypeError' || err.name === 'SecurityError') {
+              setError('Camera access not allowed. Make sure you are using HTTPS.');
+            } else {
+              setError('Could not access camera: ' + err.name);
+            }
+          } else {
+            setError('Could not access camera: ' + (err instanceof Error ? err.message : String(err)));
+          }
+          setAnimating(false);
         }
-      };
-      
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.onloadedmetadata = () => {
-          videoRef.current!.play()
-            .then(() => {
-              setIsCameraActive(true);
-              setError(null);
-              console.log("Camera started successfully");
-              
-              // Connect to WebSocket when camera starts
-              connectWebSocket();
-            })
-            .catch(err => {
-              setError("Failed to play video: " + err.message);
-              console.error("Failed to play video:", err);
-            });
-        };
-      }
-    } catch (err) {
-      setError('Could not access camera: ' + (err instanceof Error ? err.message : String(err)));
-      console.error('Error accessing camera:', err);
+      }, 800); // Eye opening animation takes about 800ms
     }
   };
   
-  // Stop camera feed
+  // Stop camera feed with animation
   const stopCamera = () => {
-    if (videoRef.current && videoRef.current.srcObject) {
-      const stream = videoRef.current.srcObject as MediaStream;
-      const tracks = stream.getTracks();
+    if (animating) return;
+    
+    setAnimating(true);
+    
+    // Start eye closing animation
+    const eyeElement = document.getElementById('camera-eye');
+    if (eyeElement) {
+      eyeElement.classList.remove('opening');
+      eyeElement.classList.add('closing');
       
-      tracks.forEach(track => track.stop());
-      videoRef.current.srcObject = null;
-      setIsCameraActive(false);
-      
-      // Clear the canvas when camera is stopped
-      if (canvasRef.current) {
-        const ctx = canvasRef.current.getContext('2d');
-        if (ctx) {
-          ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-          ctx.fillStyle = 'black';
-          ctx.fillRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+      // Wait for animation to complete before actually stopping camera
+      setTimeout(() => {
+        if (videoRef.current && videoRef.current.srcObject) {
+          const stream = videoRef.current.srcObject as MediaStream;
+          const tracks = stream.getTracks();
+          
+          tracks.forEach(track => track.stop());
+          videoRef.current.srcObject = null;
+          setIsCameraActive(false);
+          
+          // Clear the canvas when camera is stopped
+          if (canvasRef.current) {
+            const ctx = canvasRef.current.getContext('2d');
+            if (ctx) {
+              ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+              ctx.fillStyle = 'black';
+              ctx.fillRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+            }
+          }
+          
+          // Disconnect WebSocket when camera stops
+          disconnectWebSocket();
+          
+          // Keep animation state active slightly longer to ensure eyelids close completely
+          setTimeout(() => {
+            eyeElement.classList.remove('closing');
+            setAnimating(false);
+          }, 100);
         }
-      }
-      
-      // Disconnect WebSocket when camera stops
-      disconnectWebSocket();
+      }, 700); // Give a little time for the animation to be visible before stopping
     }
   };
   
@@ -95,7 +168,7 @@ export default function Camera() {
   const connectWebSocket = () => {
     try {
       // Use your backend URL here
-      const socket = io('http://localhost:5000', {
+      const socket = io('http://10.0.0.199:5000', {
         transports: ['websocket'],
         reconnection: true,
         reconnectionAttempts: 5,
@@ -272,9 +345,9 @@ export default function Camera() {
   
   return (
     <div className="flex flex-col items-center w-full h-full">
-      <div className="relative w-full h-full overflow-hidden rounded-lg bg-gray-100">
+      <div className="relative w-full h-full overflow-hidden rounded-lg bg-black">
         {error && (
-          <div className="absolute top-0 left-0 right-0 p-2 text-white bg-red-500 text-center z-10">
+          <div className="absolute top-0 left-0 right-0 p-1 text-white bg-red-500 text-center z-10 text-sm">
             {error}
           </div>
         )}
@@ -290,51 +363,108 @@ export default function Camera() {
         
         <canvas 
           ref={canvasRef}
-          className="w-full h-full object-cover"
+          className="w-full h-full object-contain"
         />
         
-        <div className="absolute bottom-4 left-0 right-0 flex justify-center gap-2">
-          {!isCameraActive ? (
+        {/* Fullscreen eye animation */}
+        <div 
+          id="camera-eye" 
+          className={`absolute inset-0 z-20 ${isCameraActive ? 'opacity-100' : 'opacity-100'}`}
+          style={{ pointerEvents: isCameraActive ? 'none' : 'auto' }}
+        >
+          <div className="eye-container">
+            <div className="eye-lid top-lid">
+              <div className="lid-pattern"></div>
+              <div className="lid-edge"></div>
+            </div>
+            <div className="eye-lid bottom-lid">
+              <div className="lid-pattern"></div>
+              <div className="lid-edge"></div>
+            </div>
+          </div>
+        </div>
+        
+        {/* Center button when camera is inactive */}
+        {!isCameraActive && !animating && (
+          <div className="absolute inset-0 flex items-center justify-center z-30">
             <button
               onClick={startCamera}
-              className="px-4 py-2 bg-blue-500 text-white rounded-full hover:bg-blue-600 transition-colors"
+              className="px-6 py-3 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-full 
+                         hover:from-blue-600 hover:to-purple-700 transition-all duration-300 shadow-lg
+                         transform hover:scale-105 hover:shadow-xl text-lg font-semibold flex items-center gap-2"
+              disabled={animating}
             >
-              Start Camera
+              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                <circle cx="12" cy="12" r="3"></circle>
+              </svg>
+              Open Eyes
             </button>
-          ) : (
-            <button
-              onClick={stopCamera}
-              className="px-4 py-2 bg-red-500 text-white rounded-full hover:bg-red-600 transition-colors"
-            >
-              Stop Camera
-            </button>
-          )}
-          
-          {isCameraActive && (
-            <button
-              onClick={toggleDetections}
-              className={`px-4 py-2 ${showDetections ? 'bg-green-500 hover:bg-green-600' : 'bg-gray-500 hover:bg-gray-600'} text-white rounded-full transition-colors`}
-            >
-              {showDetections ? 'Hide Detections' : 'Show Detections'}
-            </button>
+          </div>
+        )}
+        
+        {/* Bottom controls when camera is active */}
+        <div className="absolute bottom-2 left-0 right-0 flex justify-center gap-2 z-30">
+          {isCameraActive && !animating && (
+            <>
+              <button
+                onClick={stopCamera}
+                className="px-4 py-2 bg-gradient-to-r from-red-500 to-pink-600 text-white rounded-full 
+                          hover:from-red-600 hover:to-pink-700 transition-all duration-300 shadow-lg
+                          transform hover:scale-105 hover:shadow-xl text-sm font-semibold flex items-center gap-2"
+                disabled={animating}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"></path>
+                  <path d="M14.12 14.12A3 3 0 1 1 9.88 9.88"></path>
+                  <path d="M1 1l22 22"></path>
+                </svg>
+                Close Eyes
+              </button>
+              
+              <button
+                onClick={toggleDetections}
+                className={`px-4 py-2 text-white rounded-full shadow-lg transition-all duration-300
+                            transform hover:scale-105 hover:shadow-xl text-sm font-semibold flex items-center gap-2
+                            ${showDetections 
+                              ? 'bg-gradient-to-r from-green-500 to-teal-600 hover:from-green-600 hover:to-teal-700' 
+                              : 'bg-gradient-to-r from-gray-500 to-slate-600 hover:from-gray-600 hover:to-slate-700'}`}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect>
+                  <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path>
+                </svg>
+                {showDetections ? 'Hide Objects' : 'Show Objects'}
+              </button>
+            </>
           )}
         </div>
         
-        <div className="absolute top-4 right-4 flex flex-col gap-1">
-          <div className={`px-2 py-1 rounded text-xs ${isConnected ? 'bg-green-500' : 'bg-red-500'} text-white`}>
-            {isConnected ? "Connected" : "Disconnected"}
-          </div>
-          
-          {isProcessing && (
-            <div className="px-2 py-1 bg-blue-500 rounded text-xs text-white">
-              Processing...
+        {/* Status indicators */}
+        {isCameraActive && (
+          <div className="absolute top-2 right-2 flex flex-col gap-1">
+            <div className={`px-2 py-0.5 rounded text-xs ${isConnected ? 'bg-green-500' : 'bg-red-500'} text-white`}>
+              {isConnected ? "Connected" : "Disconnected"}
             </div>
-          )}
-          
-          <div className="px-2 py-1 bg-black/50 rounded text-xs text-white">
-            {detectedObjects.length} objects detected
+            
+            {isProcessing && (
+              <div className="px-2 py-0.5 bg-blue-500 rounded text-xs text-white">
+                Processing...
+              </div>
+            )}
+            
+            <div className="px-2 py-0.5 bg-black/50 rounded text-xs text-white">
+              {detectedObjects.length} objects
+            </div>
           </div>
-        </div>
+        )}
+        
+        {/* Loading spinner during animation */}
+        {animating && (
+          <div className="absolute inset-0 flex items-center justify-center z-40 bg-black/30">
+            <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+          </div>
+        )}
       </div>
     </div>
   );

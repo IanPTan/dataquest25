@@ -2,18 +2,19 @@ import Camera from "./components/camera";
 
 export default function Home() {
   return (
-    <div className="flex flex-col h-screen w-screen">
-      <header className="py-4 bg-black text-white text-center">
-        <h1 className="text-xl font-bold">Camera Test</h1>
+    <div className="flex flex-col h-screen w-screen overflow-hidden">
+      <header className="py-2 bg-gray-300 text-black text-center">
+        <h1 className="text-lg font-bold">Camera Test</h1>
+        <p className="text-xs text-black">Note: Camera requires HTTPS on mobile browsers</p>
       </header>
       
-      <main className="flex-1 flex items-center justify-center bg-gray-900 p-4">
-        <div className="w-full h-full max-w-4xl max-h-[70vh]">
+      <main className="flex-grow flex items-center justify-center bg-gray-300 p-2" style={{ minHeight: 0 }}>
+        <div className="w-full h-full" style={{ maxHeight: "calc(100vh - 80px)" }}>
           <Camera />
         </div>
       </main>
       
-      <footer className="py-2 text-center text-sm text-gray-400 bg-black">
+      <footer className="py-1 text-center text-xs text-gray-400 bg-black">
         Camera Testing Mode
       </footer>
     </div>
