@@ -1,8 +1,8 @@
-# EyeSee - AI-Powered Visual Assistant
+# AI-Powered Visual Assistant
 
 ## Overview
 
-EyeSee is an AI-powered visual assistant that uses computer vision to detect objects and describe scenes in real-time. It's designed to help visually impaired users understand their surroundings through audio descriptions and can also serve as an educational tool for object recognition.
+An AI-powered visual assistant that uses computer vision to detect objects and describe scenes in real-time. It's designed to help visually impaired users understand their surroundings through audio descriptions and can also serve as an educational tool for object recognition.
 
 ## Features
 
@@ -33,8 +33,8 @@ EyeSee is an AI-powered visual assistant that uses computer vision to detect obj
 
 1. **Clone the repository**
    ```
-   git clone https://github.com/yourusername/eyesee.git
-   cd eyesee
+   git clone https://github.com/IanPTan/dataquest25.git
+   cd dataquest25
    ```
 
 2. **Set up the backend**
